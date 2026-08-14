@@ -1493,7 +1493,13 @@ async def load_ontology(
             
             # Register in registry
             registry = _get_registry(request)
-            ontology_uri = ontology_data.data.get("uri", f"temp:{uuid.uuid4().hex[:12]}")
+            # Ontologies without an owl:Ontology IRI must not all collapse onto
+            # the "" registry key — key by source URL before minting a temp id.
+            ontology_uri = (
+                ontology_data.data.get("uri")
+                or body.url
+                or f"temp:{uuid.uuid4().hex[:12]}"
+            )
             registry[ontology_uri] = OntologyEntry(
                 uri=ontology_uri,
                 name=ontology_data.data.get("name", "Imported Ontology"),
@@ -1551,7 +1557,7 @@ async def load_ontology(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     registry = _get_registry(request)
-    ontology_uri = metadata.get("uri", f"temp:{uuid.uuid4().hex[:12]}")
+    ontology_uri = metadata.get("uri") or body.url or f"temp:{uuid.uuid4().hex[:12]}"
     registry[ontology_uri] = OntologyEntry(
         uri=ontology_uri,
         name=metadata.get("name", "Imported Ontology"),
