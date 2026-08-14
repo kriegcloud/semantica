@@ -5,6 +5,7 @@ Ontology Hub routes: registry, URL/file loading, preview, creation, entity searc
 import os
 import asyncio
 import ipaddress
+import json
 import logging
 import socket
 import uuid
@@ -532,6 +533,47 @@ def _get_registry(request: Request) -> Dict[str, OntologyEntry]:
     if not hasattr(request.app.state, "ontology_registry"):
         request.app.state.ontology_registry = {}
     return request.app.state.ontology_registry
+
+
+def _registry_persist_path() -> Optional[str]:
+    return os.environ.get("SEMANTICA_REGISTRY_PATH")
+
+
+def persist_registry(app) -> None:
+    """Write the ontology registry to SEMANTICA_REGISTRY_PATH (atomic), if set."""
+    path = _registry_persist_path()
+    if not path:
+        return
+    registry = getattr(app.state, "ontology_registry", {})
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(
+                {uri: entry.model_dump() for uri, entry in registry.items()},
+                fh,
+                indent=2,
+                default=str,
+            )
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("Could not persist ontology registry to %s: %s", path, exc)
+
+
+def restore_registry(app) -> None:
+    """Load the ontology registry from SEMANTICA_REGISTRY_PATH, if present."""
+    path = _registry_persist_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        app.state.ontology_registry = {
+            uri: OntologyEntry.model_validate(entry) for uri, entry in data.items()
+        }
+        logger.info("Restored %d ontology registry entries from %s", len(data), path)
+    except Exception as exc:
+        logger.warning("Could not restore ontology registry from %s: %s", path, exc)
 
 
 def _get_alignment_store(request: Request) -> Dict[str, OntologyAlignment]:
@@ -1467,7 +1509,8 @@ async def load_ontology(
                 tags=body.tags,
                 source_url=body.url,
             )
-            
+            persist_registry(request.app)
+
             return LoadOntologyResponse(
                 uri=ontology_uri,
                 name=ontology_data.data.get("name", "Imported Ontology"),
@@ -1524,6 +1567,7 @@ async def load_ontology(
         tags=body.tags,
         source_url=body.url,
     )
+    persist_registry(request.app)
 
     return LoadOntologyResponse(
         uri=ontology_uri,
@@ -1722,6 +1766,7 @@ async def create_ontology(
         enabled=True,
         tags=body.tags,
     )
+    persist_registry(request.app)
 
     return LoadOntologyResponse(
         uri=onto_uri, name=body.name,
@@ -2910,6 +2955,7 @@ async def remove_ontology(
 
     if not removed_from_registry and nodes_removed == 0:
         raise HTTPException(status_code=404, detail="Ontology not found in registry.")
+    persist_registry(request.app)
     return {"status": "removed", "uri": target_uri, "nodes_removed": nodes_removed}
 
 
@@ -2920,6 +2966,7 @@ async def toggle_ontology(ontology_uri: str, request: Request):
         raise HTTPException(status_code=404, detail="Ontology not found in registry.")
     entry = registry[ontology_uri]
     entry.enabled = not entry.enabled
+    persist_registry(request.app)
     return ToggleResponse(uri=ontology_uri, enabled=entry.enabled)
 
 

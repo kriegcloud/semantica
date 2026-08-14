@@ -118,6 +118,8 @@ def create_app(
         app.state.ws_manager = ConnectionManager()
         app.state.session = active_session
         _install_mutation_bridge(app, active_session)
+        from .routes.ontology import restore_registry
+        restore_registry(app)
         yield
 
     app = FastAPI(
