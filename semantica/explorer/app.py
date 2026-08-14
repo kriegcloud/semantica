@@ -110,6 +110,8 @@ def create_app(
         app.state.agent_memory = agent_memory
         app.state.markdown_resources = markdown_resources
         install_mutation_bridge(app, active_session)
+        from .routes.ontology import restore_registry
+        restore_registry(app)
         yield
 
     app = FastAPI(

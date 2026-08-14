@@ -2,13 +2,15 @@
 Import and export routes for graph datasets.
 """
 
+import asyncio
 import csv
 import io
 import json
 import logging
+import os
 import re
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from ..dependencies import get_session
@@ -17,6 +19,33 @@ from ..session import GraphSession
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Export / Import"])
+
+
+@router.post("/api/session/save")
+async def save_session_snapshot(
+    request: Request,
+    session: GraphSession = Depends(get_session),
+):
+    """Persist the live session graph to SEMANTICA_KG_PATH (the --graph seed)
+    and the ontology registry to SEMANTICA_REGISTRY_PATH, so both survive a
+    server restart. Explicit save — nothing autosaves."""
+    kg_path = os.environ.get("SEMANTICA_KG_PATH")
+    if not kg_path:
+        raise HTTPException(
+            status_code=422, detail="SEMANTICA_KG_PATH is not configured; nowhere to save."
+        )
+
+    def _save() -> None:
+        with session._lock:
+            session.graph.save_to_file(kg_path)
+
+    await asyncio.to_thread(_save)
+
+    from .ontology import persist_registry
+    persist_registry(request.app)
+
+    nodes, edges = session.get_raw_counts()
+    return {"status": "saved", "path": kg_path, "nodes": nodes, "edges": edges}
 
 _IMPORT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 # Only formats that the import handler actually parses.
