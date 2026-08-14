@@ -2871,12 +2871,46 @@ async def validate_shacl(
 # ---------------------------------------------------------------------------
 
 @router.delete("/{ontology_uri:path}")
-async def remove_ontology(ontology_uri: str, request: Request):
+async def remove_ontology(
+    ontology_uri: str,
+    request: Request,
+    session: GraphSession = Depends(get_session),
+):
     registry = _get_registry(request)
-    if ontology_uri not in registry:
+
+    # Browsers drop URI fragments when the SPA builds the request URL, so a
+    # registry entry keyed ".../prov#" arrives here as ".../prov". Resolve
+    # tolerantly against the common trailing-delimiter variants.
+    candidates = [ontology_uri, f"{ontology_uri}#", f"{ontology_uri}/"]
+    resolved = next((c for c in candidates if c in registry), None)
+    target_uri = resolved or ontology_uri
+
+    removed_from_registry = False
+    if resolved is not None:
+        del registry[resolved]
+        removed_from_registry = True
+
+    # list_registry also surfaces "implicit" entries: ontology/scheme-type
+    # nodes living in the session graph without a registry record. Remove the
+    # ontology node and every node belonging to it (scheme_uri/uri property)
+    # so implicit entries are deletable instead of 404ing.
+    match_set = set(candidates)
+    match_set.add(target_uri)
+    all_nodes, _ = await asyncio.to_thread(session.get_nodes, skip=0, limit=999_999)
+    node_ids = set()
+    for node in all_nodes:
+        node_id = node.get("id", "")
+        props = node.get("properties", {}) or {}
+        scheme_uri = props.get("scheme_uri") or props.get("uri")
+        if node_id in match_set or scheme_uri in match_set:
+            node_ids.add(node_id)
+    nodes_removed = 0
+    if node_ids:
+        nodes_removed = await asyncio.to_thread(session.remove_nodes, list(node_ids))
+
+    if not removed_from_registry and nodes_removed == 0:
         raise HTTPException(status_code=404, detail="Ontology not found in registry.")
-    del registry[ontology_uri]
-    return {"status": "removed", "uri": ontology_uri}
+    return {"status": "removed", "uri": target_uri, "nodes_removed": nodes_removed}
 
 
 @router.patch("/{ontology_uri:path}/toggle", response_model=ToggleResponse)
