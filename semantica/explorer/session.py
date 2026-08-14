@@ -748,6 +748,34 @@ class GraphSession:
             self.rebuild_search_index()
         return added
 
+    def remove_nodes(self, node_ids: List[str]) -> int:
+        """Remove nodes (and any edges touching them) from the session graph.
+
+        ContextGraph has no removal API of its own, so this mutates its node
+        dict and edge list directly, then rebuilds the derived caches the same
+        way the add_* paths do.
+        """
+        targets = {node_id for node_id in node_ids if node_id}
+        if not targets:
+            return 0
+        with self._lock:
+            removed = 0
+            for node_id in targets:
+                if node_id in self.graph.nodes:
+                    del self.graph.nodes[node_id]
+                    removed += 1
+            if removed:
+                self.graph.edges = [
+                    edge
+                    for edge in self.graph.edges
+                    if edge.source_id not in targets and edge.target_id not in targets
+                ]
+                self._bump_graph_revision_locked()
+        if removed:
+            self.invalidate_embedding_cache()
+            self.rebuild_search_index()
+        return removed
+
     def add_edges(self, edges: List[Dict[str, Any]]) -> int:
         with self._lock:
             self.validate_skos_hierarchy(edges)
