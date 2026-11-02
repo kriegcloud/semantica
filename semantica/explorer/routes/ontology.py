@@ -3205,7 +3205,11 @@ async def remove_ontology(
             node_ids.add(node_id)
     nodes_removed = 0
     if node_ids:
-        nodes_removed = await asyncio.to_thread(session.remove_nodes, list(node_ids))
+        nodes_removed = await asyncio.to_thread(
+            session.remove_nodes,
+            list(node_ids),
+            reason=f"explorer: ontology DELETE {target_uri}",
+        )
 
     if not removed_from_registry and nodes_removed == 0:
         raise HTTPException(status_code=404, detail="Ontology not found in registry.")

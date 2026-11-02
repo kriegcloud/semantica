@@ -794,32 +794,29 @@ class GraphSession:
             self.rebuild_search_index()
         return added
 
-    def remove_nodes(self, node_ids: List[str]) -> int:
+    def remove_nodes(self, node_ids: List[str], reason: Optional[str] = None) -> int:
         """Remove nodes (and any edges touching them) from the session graph.
 
-        ContextGraph has no removal API of its own, so this mutates its node
-        dict and edge list directly, then rebuilds the derived caches the same
-        way the add_* paths do.
+        Delegates to ``ContextGraph.purge_node`` (cascade), which keeps
+        ``node_type_index``/``edge_type_index``/``_adjacency`` consistent and
+        emits ``REMOVE_NODE``/``REMOVE_EDGE`` so the mutation bridge updates the
+        search index and WebSocket clients. Without a mutation callback the
+        derived caches are rebuilt here, mirroring the add_* paths.
         """
         targets = {node_id for node_id in node_ids if node_id}
         if not targets:
             return 0
-        with self._lock:
-            removed = 0
-            for node_id in targets:
-                if node_id in self.graph.nodes:
-                    del self.graph.nodes[node_id]
-                    removed += 1
-            if removed:
-                self.graph.edges = [
-                    edge
-                    for edge in self.graph.edges
-                    if edge.source_id not in targets and edge.target_id not in targets
-                ]
-                self._bump_graph_revision_locked()
+        removed = 0
+        for node_id in targets:
+            if self.graph.purge_node(node_id, reason=reason, cascade=True):
+                removed += 1
         if removed:
+            has_mutation_callback = callable(getattr(self.graph, "mutation_callback", None))
+            if not has_mutation_callback:
+                with self._lock:
+                    self._bump_graph_revision_locked()
+                self.rebuild_search_index()
             self.invalidate_embedding_cache()
-            self.rebuild_search_index()
         return removed
 
     def add_edges(self, edges: List[Dict[str, Any]]) -> int:
